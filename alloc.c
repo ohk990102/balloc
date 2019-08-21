@@ -27,9 +27,10 @@ if((check)) {\
 #endif
 
 typedef struct memory_chunk {
-    // size of chunk, including header & 
+    // size of chunk, including header
     size_t size;
     // pointer to next free chunk
+    // also overlaps userdata offset
     struct memory_chunk *next;
     struct memory_chunk *prev;
 } memory_chunk;
@@ -70,7 +71,7 @@ static balloc_info_struct balloc_info = {NULL, NULL};
 
 /**
  * Increase arena size enough to hold [size] bytes. 
- * Alligns break address by ALLOC_SIZE_ALLIGN. 
+ * Alligns break address by SBRK_SIZE_ALLIGN. 
  * 
  * size_t size:
  *      minimum chunk size needed. 
