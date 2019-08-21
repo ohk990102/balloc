@@ -40,6 +40,8 @@ if((check)) {\
 #define MAX(a, b) (((a) > (b)) ? (a) : (b))
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
+#define CHECK_FLAGS(chunk)          (((chunk)->size) & (ALLOC_SIZE_ALLIGN - 1))
+
 #define CHECK_PREV_INUSE(chunk)     ((chunk)->size & 0x1)
 #define SET_PREV_INUSE(chunk)       ((chunk)->size |= 0x1)
 
@@ -197,32 +199,6 @@ void *myalloc(size_t size) {
     return dumb_alloc(size);
 }
 
-/**
- * Realloc memory. 
- *
- * ptr: 
- *      pointer to realloc. 
- * size:
- *      minimum userdata size needed. 
- * returns:
- *      userdata pointer of memory_chunk on success. NULL on fail.
- **/
-void *myrealloc(void *ptr, size_t size) {
-    if(ptr == NULL)
-        return myalloc(size);
-
-    memory_chunk *mchunkptr = GET_CHUNK_PTR(ptr);
-    if(GET_USERDATA_SIZE(mchunkptr) >= size) {
-        // TODO: decrease chunk size
-        return ptr;
-    }
-    void *newptr = myalloc(size);
-    if(ptr != NULL) {
-        memcpy(newptr, ptr, GET_USERDATA_SIZE(mchunkptr));
-    }
-
-    return newptr;
-}
 
 /**
  * Free memory. 
