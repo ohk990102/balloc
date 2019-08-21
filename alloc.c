@@ -200,6 +200,7 @@ void *myalloc(size_t size) {
 }
 
 
+
 /**
  * Free memory. 
  *
@@ -236,4 +237,41 @@ void myfree(void *ptr) {
     }
 
     // Cannot reach
+}
+
+/**
+ * Realloc memory. 
+ *
+ * ptr: 
+ *      pointer to realloc. 
+ * size:
+ *      minimum userdata size needed. 
+ * returns:
+ *      userdata pointer of memory_chunk on success. NULL on fail.
+ **/
+void *myrealloc(void *ptr, size_t size) {
+    if(ptr == NULL)
+        return myalloc(size);
+
+    memory_chunk *mchunkptr = GET_CHUNK_PTR(ptr);
+    if(GET_USERDATA_SIZE(mchunkptr) >= size) {
+        if(GET_CHUNK_SIZE(mchunkptr) >= MIN_ALLOC_SIZE + GET_ALLIGNED_ALLOC_SIZE(size)) {
+            size_t new_size = GET_ALLIGNED_ALLOC_SIZE(size);
+            size_t left_size = GET_CHUNK_SIZE(mchunkptr) - new_size;
+            ASSERT(left_size < MIN_ALLOC_SIZE, "wrong split");
+            mchunkptr->size = new_size | CHECK_FLAGS(mchunkptr);
+            memory_chunk *mchunkptr2free = ((void *)mchunkptr) + new_size;
+            mchunkptr2free->size = left_size;
+            SET_PREV_INUSE(mchunkptr2free);
+            myfree(GET_USERDATA_PTR(mchunkptr2free));
+            return ptr;
+        }
+        return ptr;
+    }
+    void *newptr = myalloc(size);
+    if(ptr != NULL) {
+        memcpy(newptr, ptr, GET_USERDATA_SIZE(mchunkptr));
+    }
+
+    return newptr;
 }
