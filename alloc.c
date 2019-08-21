@@ -255,6 +255,7 @@ void *myrealloc(void *ptr, size_t size) {
 
     memory_chunk *mchunkptr = GET_CHUNK_PTR(ptr);
     if(GET_USERDATA_SIZE(mchunkptr) >= size) {
+        /**
         if(GET_CHUNK_SIZE(mchunkptr) >= MIN_ALLOC_SIZE + GET_ALLIGNED_ALLOC_SIZE(size)) {
             size_t new_size = GET_ALLIGNED_ALLOC_SIZE(size);
             size_t left_size = GET_CHUNK_SIZE(mchunkptr) - new_size;
@@ -266,6 +267,7 @@ void *myrealloc(void *ptr, size_t size) {
             myfree(GET_USERDATA_PTR(mchunkptr2free));
             return ptr;
         }
+        **/
         return ptr;
     }
     void *newptr = myalloc(size);
