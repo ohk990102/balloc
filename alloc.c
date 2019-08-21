@@ -56,7 +56,7 @@ if((check)) {\
 
 // Fastbin macros
 #define FASTBIN_MIN_CHUNK_SIZE          (MIN_ALLOC_SIZE)
-#define FASTBIN_COUNT                   (8)
+#define FASTBIN_COUNT                   (10)
 #define FASTBIN_MAX_CHUNK_SIZE          (FASTBIN_MIN_CHUNK_SIZE + (FASTBIN_COUNT - 1) * ALLOC_SIZE_ALLIGN)
 #define FASTBIN_IS_FASTBIN_SIZE(size)   (FASTBIN_MIN_CHUNK_SIZE <= (size) && (size) <= FASTBIN_MAX_CHUNK_SIZE)
 #define FASTBIN_GET_BIN_OFFSET(size)    ((size - FASTBIN_MIN_CHUNK_SIZE) >> ALLOC_SIZE_ALLIGN_SHIFT)
