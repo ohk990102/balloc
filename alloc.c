@@ -26,6 +26,39 @@ if((check)) {\
 #define ASSERT(check, msg) {}
 #endif
 
+
+// Define consts
+#define SBRK_SIZE_ALLIGN            (12)
+#define ALLOC_SIZE_ALLIGN_SHIFT     (3)
+#define ALLOC_SIZE_ALLIGN           (1 << ALLOC_SIZE_ALLIGN_SHIFT)
+
+#define MIN_ALLOC_SIZE              (sizeof(memory_chunk))
+#define HEADER_SIZE                 (offsetof(memory_chunk, next))
+#define UNINITIALIZED_ARENA_SIZE    (balloc_info.end_of_arena - balloc_info.uninitialized_arena)
+
+// Define macro functions
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+
+#define CHECK_PREV_INUSE(chunk)     ((chunk)->size & 0x1)
+#define SET_PREV_INUSE(chunk)       ((chunk)->size |= 0x1)
+
+#define GET_USERDATA_PTR(chunk)     (((void *)(chunk))+HEADER_SIZE)
+#define GET_CHUNK_PTR(ptr)          (((void *)(ptr))-HEADER_SIZE)
+#define GET_USERDATA_SIZE(chunk)    ((((chunk)->size) & (~(ALLOC_SIZE_ALLIGN - 1)))-HEADER_SIZE)
+#define GET_CHUNK_SIZE(chunk)       (((chunk)->size) & (~(ALLOC_SIZE_ALLIGN - 1)))
+
+#define GET_ALLIGNED_SIZE_MULTIPLES(size, multiples)        ((((size) + (multiples) - 1) / (multiples)) * (multiples))
+#define GET_ALLIGNED_SIZE_SHIFT(size, shift)                ((((size) + (1 << (shift)) - 1) >> (shift)) << (shift))
+#define GET_ALLIGNED_ALLOC_SIZE(size)                       (MAX((GET_ALLIGNED_SIZE_SHIFT((size) + HEADER_SIZE, ALLOC_SIZE_ALLIGN_SHIFT)), GET_ALLIGNED_SIZE_SHIFT(MIN_ALLOC_SIZE, ALLOC_SIZE_ALLIGN_SHIFT)))
+
+// Fastbin macros
+#define FASTBIN_MIN_CHUNK_SIZE          (MIN_ALLOC_SIZE)
+#define FASTBIN_COUNT                   (8)
+#define FASTBIN_MAX_CHUNK_SIZE          (FASTBIN_MIN_CHUNK_SIZE + (FASTBIN_COUNT - 1) * ALLOC_SIZE_ALLIGN)
+#define FASTBIN_IS_FASTBIN_SIZE(size)   (FASTBIN_MIN_CHUNK_SIZE <= (size) && (size) <= FASTBIN_MAX_CHUNK_SIZE)
+#define FASTBIN_GET_BIN_OFFSET(size)    ((size - FASTBIN_MIN_CHUNK_SIZE) >> ALLOC_SIZE_ALLIGN_SHIFT)
+
 typedef struct memory_chunk {
     // size of chunk, including header
     size_t size;
@@ -42,36 +75,10 @@ typedef struct balloc_info_struct {
     void *end_of_arena;
 
     bin unsorted_bin;
+    bin fastbin[FASTBIN_COUNT];
 } balloc_info_struct;
 
-balloc_info_struct balloc_info = {NULL, NULL, {NULL, NULL, NULL}};
-
-// Define consts
-#define SBRK_SIZE_ALLIGN            12
-#define ALLOC_SIZE_ALLIGN           3
-
-#define MIN_ALLOC_SIZE              sizeof(memory_chunk)
-#define HEADER_SIZE                 offsetof(memory_chunk, next)
-#define UNINITIALIZED_ARENA_SIZE    (balloc_info.end_of_arena - balloc_info.uninitialized_arena)
-
-// Define macro functions
-#define MAX(a, b) (((a) > (b)) ? (a) : (b))
-#define MIN(a, b) (((a) < (b)) ? (a) : (b))
-
-
-#define CHECK_PREV_INUSE(chunk)     ((chunk)->size & 0x1)
-#define SET_PREV_INUSE(chunk)       ((chunk)->size |= 0x1)
-
-#define GET_USERDATA_PTR(chunk)     (((void *)(chunk))+HEADER_SIZE)
-#define GET_CHUNK_PTR(ptr)        (((void *)(ptr))-HEADER_SIZE)
-#define GET_USERDATA_SIZE(chunk)    ((((chunk)->size) & (~((0x1 << ALLOC_SIZE_ALLIGN) - 1)))-HEADER_SIZE)
-#define GET_CHUNK_SIZE(chunk)       (((chunk)->size) & (~((0x1 << ALLOC_SIZE_ALLIGN) - 1)))
-
-#define GET_ALLIGNED_SIZE_MULTIPLES(size, multiples)        ((((size) + (multiples) - 1) / (multiples)) * (multiples))
-#define GET_ALLIGNED_SIZE_SHIFT(size, shift)                ((((size) + (1 << (shift)) - 1) >> (shift)) << (shift))
-#define GET_ALLIGNED_ALLOC_SIZE(size)                       MAX((GET_ALLIGNED_SIZE_SHIFT((size) + HEADER_SIZE, ALLOC_SIZE_ALLIGN)), GET_ALLIGNED_SIZE_SHIFT(MIN_ALLOC_SIZE, ALLOC_SIZE_ALLIGN))
-
-
+balloc_info_struct balloc_info;
 
 /**
  * Increase arena size enough to hold [size] bytes. 
@@ -136,6 +143,17 @@ void *myalloc(size_t size) {
     if(balloc_info.uninitialized_arena == NULL)
         if(!increase_arena(GET_ALLIGNED_ALLOC_SIZE(size)))
             return NULL;
+
+    size_t alloc_size = GET_ALLIGNED_ALLOC_SIZE(size);
+    if(FASTBIN_IS_FASTBIN_SIZE(alloc_size)) {
+        uint32_t offset = FASTBIN_GET_BIN_OFFSET(alloc_size);
+        if(balloc_info.fastbin[offset].next != NULL) {
+            memory_chunk *iter = balloc_info.fastbin[offset].next;
+            balloc_info.fastbin[offset].next = iter->next;
+            return GET_USERDATA_PTR(iter);
+        }
+    }
+    // Unsorted bin
     if(balloc_info.unsorted_bin.next != NULL) {
         memory_chunk *iter = &(balloc_info.unsorted_bin);
         /**
@@ -217,7 +235,17 @@ void myfree(void *ptr) {
         return;
 
     memory_chunk *mchunkptr = GET_CHUNK_PTR(ptr);
+
+    size_t size = GET_CHUNK_SIZE(mchunkptr);
+    if(FASTBIN_IS_FASTBIN_SIZE(size)) {
+        uint32_t offset = FASTBIN_GET_BIN_OFFSET(size);
+        debug("%x %d\n", size, offset);
+        mchunkptr->next = balloc_info.fastbin[offset].next;
+        balloc_info.fastbin[offset].next = mchunkptr;
+        return;
+    }
     
+    // Unsorted bin
     if(balloc_info.unsorted_bin.prev == NULL) {
         mchunkptr->next = NULL;
         mchunkptr->prev = NULL;
@@ -230,4 +258,6 @@ void myfree(void *ptr) {
         balloc_info.unsorted_bin.prev->next = mchunkptr;
         balloc_info.unsorted_bin.prev = mchunkptr;
     }
+
+    // Cannot reach
 }
