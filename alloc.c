@@ -35,12 +35,16 @@ typedef struct memory_chunk {
     struct memory_chunk *prev;
 } memory_chunk;
 
+typedef memory_chunk bin;
+
 typedef struct balloc_info_struct {
     void *uninitialized_arena;
     void *end_of_arena;
+
+    bin unsorted_bin;
 } balloc_info_struct;
 
-static balloc_info_struct balloc_info = {NULL, NULL};
+balloc_info_struct balloc_info = {NULL, NULL, {NULL, NULL, NULL}};
 
 // Define consts
 #define SBRK_SIZE_ALLIGN            12
@@ -132,6 +136,46 @@ void *myalloc(size_t size) {
     if(balloc_info.uninitialized_arena == NULL)
         if(!increase_arena(GET_ALLIGNED_ALLOC_SIZE(size)))
             return NULL;
+    if(balloc_info.unsorted_bin.next != NULL) {
+        memory_chunk *iter = &(balloc_info.unsorted_bin);
+        /**
+        if(GET_USERDATA_SIZE(iter) >= size) {
+            balloc_info.unsorted_bin.next = iter->next;
+            if(iter->next == NULL)
+                balloc_info.unsorted_bin.prev = NULL;
+            else
+                iter->next->prev = iter->prev;
+            return GET_CHUNK_PTR(iter);
+        }
+        while(iter->next != NULL) {
+            iter = iter->next;
+            if(GET_USERDATA_SIZE(iter) >= size) {
+
+                iter->prev->next = iter->next;
+                if(iter->next == NULL)
+                    balloc_info.unsorted_bin.prev = iter->prev;
+                else
+                    iter->next->prev = iter->prev;
+            }
+        }
+        **/
+        do {
+            iter = iter->next;
+            if(GET_USERDATA_SIZE(iter) >= size) {
+                debug("%llx %llx\n", GET_USERDATA_SIZE(iter), size);
+                if(iter->prev == NULL)
+                    balloc_info.unsorted_bin.next = iter->next;
+                else
+                    iter->prev->next = iter->next;
+                if(iter->next == NULL)
+                    balloc_info.unsorted_bin.prev = iter->prev;
+                else
+                    iter->next->prev = iter->prev;
+                return GET_USERDATA_PTR(iter);
+            }
+        }
+        while(iter->next != NULL);
+    }
     return dumb_alloc(size);
 }
 
@@ -171,5 +215,19 @@ void *myrealloc(void *ptr, size_t size) {
 void myfree(void *ptr) {
     if(ptr == NULL)
         return;
-    // TODO: implement free
+
+    memory_chunk *mchunkptr = GET_CHUNK_PTR(ptr);
+    
+    if(balloc_info.unsorted_bin.prev == NULL) {
+        mchunkptr->next = NULL;
+        mchunkptr->prev = NULL;
+        balloc_info.unsorted_bin.next = mchunkptr;
+        balloc_info.unsorted_bin.prev = mchunkptr;
+    }
+    else {
+        mchunkptr->next = NULL;
+        mchunkptr->prev = balloc_info.unsorted_bin.prev;
+        balloc_info.unsorted_bin.prev->next = mchunkptr;
+        balloc_info.unsorted_bin.prev = mchunkptr;
+    }
 }
