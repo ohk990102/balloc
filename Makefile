@@ -27,6 +27,9 @@ test_backup: replay_backup
 	$(call run_test,./$<,test3,20)
 	@echo "[+] Backup Test Complete"
 
+my_test: alloc.c my_test.c printf.c
+	$(CC) $(CFLAGS) -o $@ $^
+
 replay: alloc.c main.c printf.c
 	$(CC) $(CFLAGS) -o $@ $^
 
