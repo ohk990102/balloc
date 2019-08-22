@@ -43,20 +43,23 @@ if((check)) {\
 
 #define CHECK_FLAGS(chunk)          (((chunk)->size) & (ALLOC_SIZE_ALLIGN - 1))
 
-#define CHECK_PREV_INUSE(chunk)     ((chunk)->size & 0x1)
-#define SET_PREV_INUSE(chunk, bit)       (((bit) == 0) ? ((chunk)->size &= ~(0x1)) : ((chunk)->size |= 0x1))
+#define CHECK_ADJ_PREV_INUSE(chunk)     ((chunk)->size & 0x1)
+#define SET_ADJ_PREV_INUSE(chunk, bit)       (((bit) == 0) ? ((chunk)->size &= ~(0x1)) : ((chunk)->size |= 0x1))
 
 #define GET_USERDATA_SIZE(chunk)    ((((chunk)->size) & (~(ALLOC_SIZE_ALLIGN - 1))) - (HEADER_SIZE - USED_BY_PREV_CHUNK_SIZE))
 #define GET_CHUNK_SIZE(chunk)       (((chunk)->size) & (~(ALLOC_SIZE_ALLIGN - 1)))
 #define GET_USERDATA_PTR(chunk)     (((void *)(chunk))+offsetof(memory_chunk, next))
-#define GET_CHUNK_PTR(ptr)          (((void *)(ptr))-offsetof(memory_chunk, next))
-#define GET_NEXT_CHUNK_PTR(chunk)   (((void *)(chunk))+GET_CHUNK_SIZE(chunk))
+#define GET_CHUNK_PTR(ptr)          ((memory_chunk *)(((void *)(ptr))-offsetof(memory_chunk, next)))
+#define GET_ADJ_NEXT_CHUNK_PTR(chunk)   ((memory_chunk *)(((void *)(chunk))+GET_CHUNK_SIZE(chunk)))
+#define GET_ADJ_PREV_CHUNK_PTR(chunk)   ((memory_chunk *)(((void *)(chunk))-chunk->prev_size))
 
 #define GET_ALLIGNED_SIZE_MULTIPLES(size, multiples)        ((((size) + (multiples) - 1) / (multiples)) * (multiples))
 #define GET_ALLIGNED_SIZE_SHIFT(size, shift)                ((((size) + (1 << (shift)) - 1) >> (shift)) << (shift))
-#define GET_ALLIGNED_ALLOC_SIZE(size)                       (MAX((GET_ALLIGNED_SIZE_SHIFT((size) + HEADER_SIZE - USED_BY_PREV_CHUNK_SIZE, ALLOC_SIZE_ALLIGN_SHIFT)), GET_ALLIGNED_SIZE_SHIFT(MIN_ALLOC_SIZE, ALLOC_SIZE_ALLIGN_SHIFT)))
+#define GET_ALLIGNED_ALLOC_SIZE(size)                       (MAX((GET_ALLIGNED_SIZE_SHIFT((size) + HEADER_SIZE - USED_BY_PREV_CHUNK_SIZE, \
+                                                                ALLOC_SIZE_ALLIGN_SHIFT)), GET_ALLIGNED_SIZE_SHIFT(MIN_ALLOC_SIZE, \
+                                                                ALLOC_SIZE_ALLIGN_SHIFT)))
 
-#define IS_CHUNK(chunk)             ((chunk) < balloc_info.uninitialized_arena)
+#define IS_CHUNK(chunk)                 ((void *)(chunk) < balloc_info.uninitialized_arena)
 
 // Fastbin macros
 #define FASTBIN_MIN_CHUNK_SIZE          (MIN_ALLOC_SIZE)
@@ -114,6 +117,11 @@ bool increase_arena(size_t size) {
     return true;
 }
 
+void initialize_balloc() {
+    balloc_info.unsorted_bin.prev = &(balloc_info.unsorted_bin);
+    balloc_info.unsorted_bin.next = &(balloc_info.unsorted_bin);
+}
+
 
 /**
  * Alloc memory_chunk on uninitialized area. If size of uninitialized_arena is not enough, call increase_arena. 
@@ -132,7 +140,7 @@ void *dumb_alloc(size_t size) {
     
     memory_chunk *mchunkptr = balloc_info.uninitialized_arena;
     mchunkptr->size = alloc_size;
-    SET_PREV_INUSE(mchunkptr, 1);
+    SET_ADJ_PREV_INUSE(mchunkptr, 1);
     balloc_info.uninitialized_arena += alloc_size;
     ASSERT(GET_USERDATA_SIZE(mchunkptr) < size, "smaller userdata_size");
     ASSERT(GET_CHUNK_SIZE(mchunkptr) + (void *)mchunkptr != balloc_info.uninitialized_arena, "wrong size");
@@ -148,9 +156,11 @@ void *dumb_alloc(size_t size) {
  *      userdata pointer of memory_chunk on success. NULL on fail.
  **/
 void *myalloc(size_t size) {
-    if(balloc_info.uninitialized_arena == NULL)
+    if(balloc_info.uninitialized_arena == NULL) {
+        initialize_balloc();
         if(!increase_arena(GET_ALLIGNED_ALLOC_SIZE(size)))
             return NULL;
+    }
 
     size_t alloc_size = GET_ALLIGNED_ALLOC_SIZE(size);
     // Fastbin
@@ -163,45 +173,16 @@ void *myalloc(size_t size) {
         }
     }
     // Unsorted bin
-    if(balloc_info.unsorted_bin.next != NULL) {
-        memory_chunk *iter = &(balloc_info.unsorted_bin);
-        /**
+    memory_chunk *iter = &(balloc_info.unsorted_bin);
+    while(iter->next != &(balloc_info.unsorted_bin)) {
+        iter = iter->next;
         if(GET_USERDATA_SIZE(iter) >= size) {
-            balloc_info.unsorted_bin.next = iter->next;
-            if(iter->next == NULL)
-                balloc_info.unsorted_bin.prev = NULL;
-            else
-                iter->next->prev = iter->prev;
-            return GET_CHUNK_PTR(iter);
+            debug("%llx %llx\n", GET_USERDATA_SIZE(iter), size);
+            iter->prev->next = iter->next;
+            iter->next->prev = iter->prev;
+            SET_ADJ_PREV_INUSE(GET_ADJ_NEXT_CHUNK_PTR(iter), 1);
+            return GET_USERDATA_PTR(iter);
         }
-        while(iter->next != NULL) {
-            iter = iter->next;
-            if(GET_USERDATA_SIZE(iter) >= size) {
-
-                iter->prev->next = iter->next;
-                if(iter->next == NULL)
-                    balloc_info.unsorted_bin.prev = iter->prev;
-                else
-                    iter->next->prev = iter->prev;
-            }
-        }
-        **/
-        do {
-            iter = iter->next;
-            if(GET_USERDATA_SIZE(iter) >= size) {
-                debug("%llx %llx\n", GET_USERDATA_SIZE(iter), size);
-                if(iter->prev == NULL)
-                    balloc_info.unsorted_bin.next = iter->next;
-                else
-                    iter->prev->next = iter->next;
-                if(iter->next == NULL)
-                    balloc_info.unsorted_bin.prev = iter->prev;
-                else
-                    iter->next->prev = iter->prev;
-                return GET_USERDATA_PTR(iter);
-            }
-        }
-        while(iter->next != NULL);
     }
     return dumb_alloc(size);
 }
@@ -226,30 +207,39 @@ void myfree(void *ptr) {
         debug("%x %d\n", size, offset);
         mchunkptr->next = balloc_info.fastbin[offset].next;
         balloc_info.fastbin[offset].next = mchunkptr;
-
-        memory_chunk *nextchunkptr = GET_NEXT_CHUNK_PTR(mchunkptr);
-        if(IS_CHUNK(nextchunkptr)) {
-            nextchunkptr->prev_size = size;
-            SET_PREV_INUSE(nextchunkptr, 0);
-        }
         return;
     }
     
-    // Unsorted bin
-    if(balloc_info.unsorted_bin.prev == NULL) {
-        mchunkptr->next = NULL;
-        mchunkptr->prev = NULL;
-        balloc_info.unsorted_bin.next = mchunkptr;
-        balloc_info.unsorted_bin.prev = mchunkptr;
-    }
-    else {
-        mchunkptr->next = NULL;
-        mchunkptr->prev = balloc_info.unsorted_bin.prev;
-        balloc_info.unsorted_bin.prev->next = mchunkptr;
-        balloc_info.unsorted_bin.prev = mchunkptr;
-    }
+    // Lets see prev
 
-    // Cannot reach
+    memory_chunk *endchunkptr = GET_ADJ_NEXT_CHUNK_PTR(mchunkptr);
+    while(!CHECK_ADJ_PREV_INUSE(mchunkptr)) {
+        mchunkptr = GET_ADJ_PREV_CHUNK_PTR(mchunkptr);
+        mchunkptr->prev->next = mchunkptr->next;
+        mchunkptr->next->prev = mchunkptr->prev;
+    }
+    if(!IS_CHUNK(endchunkptr)) {
+        // Ensure that free chunk and uninitialized_arena is not joint
+        balloc_info.uninitialized_arena = mchunkptr;
+        return;
+    }
+    while(IS_CHUNK(GET_ADJ_NEXT_CHUNK_PTR(endchunkptr)) && !CHECK_ADJ_PREV_INUSE(GET_ADJ_NEXT_CHUNK_PTR(endchunkptr))) {
+        endchunkptr->prev->next = endchunkptr->next;
+        endchunkptr->next->prev = endchunkptr->prev;
+        endchunkptr = GET_ADJ_NEXT_CHUNK_PTR(endchunkptr);
+    }
+    size_t new_size = (void *)endchunkptr - (void *)mchunkptr;
+    
+    uint8_t save_bit = CHECK_ADJ_PREV_INUSE(mchunkptr);
+    mchunkptr->size = new_size;
+    SET_ADJ_PREV_INUSE(mchunkptr, save_bit);
+    endchunkptr->prev_size = new_size;
+    SET_ADJ_PREV_INUSE(endchunkptr, 0);
+
+    mchunkptr->next = &(balloc_info.unsorted_bin);
+    mchunkptr->prev = balloc_info.unsorted_bin.prev;
+    balloc_info.unsorted_bin.prev->next = mchunkptr;
+    balloc_info.unsorted_bin.prev = mchunkptr;
 }
 
 /**
@@ -278,7 +268,7 @@ void *myrealloc(void *ptr, size_t size) {
             mchunkptr->size = new_size | CHECK_FLAGS(mchunkptr);
             memory_chunk *mchunkptr2free = ((void *)mchunkptr) + new_size;
             mchunkptr2free->size = left_size;
-            SET_PREV_INUSE(mchunkptr2free);
+            SET_ADJ_PREV_INUSE(mchunkptr2free);
             myfree(GET_USERDATA_PTR(mchunkptr2free));
             return ptr;
         }
@@ -286,10 +276,9 @@ void *myrealloc(void *ptr, size_t size) {
         return ptr;
     }
     void *newptr = myalloc(size);
-    if(ptr != NULL) {
-        memcpy(newptr, ptr, GET_USERDATA_SIZE(mchunkptr));
-    }
+    memcpy(newptr, ptr, GET_USERDATA_SIZE(mchunkptr));
     myfree(ptr);
 
+    
     return newptr;
 }
