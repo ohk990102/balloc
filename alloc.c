@@ -4,7 +4,6 @@
  * Very very dumb allocator
  **/
 
-
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -45,8 +44,8 @@ if((check)) {\
 #define CHECK_PREV_INUSE(chunk)     ((chunk)->size & 0x1)
 #define SET_PREV_INUSE(chunk)       ((chunk)->size |= 0x1)
 
-#define GET_USERDATA_PTR(chunk)     (((void *)(chunk))+HEADER_SIZE)
-#define GET_CHUNK_PTR(ptr)          (((void *)(ptr))-HEADER_SIZE)
+#define GET_USERDATA_PTR(chunk)     (((void *)(chunk))+offsetof(memory_chunk, next))
+#define GET_CHUNK_PTR(ptr)          (((void *)(ptr))-offsetof(memory_chunk, next))
 #define GET_USERDATA_SIZE(chunk)    ((((chunk)->size) & (~(ALLOC_SIZE_ALLIGN - 1)))-HEADER_SIZE)
 #define GET_CHUNK_SIZE(chunk)       (((chunk)->size) & (~(ALLOC_SIZE_ALLIGN - 1)))
 
@@ -62,6 +61,7 @@ if((check)) {\
 #define FASTBIN_GET_BIN_OFFSET(size)    ((size - FASTBIN_MIN_CHUNK_SIZE) >> ALLOC_SIZE_ALLIGN_SHIFT)
 
 typedef struct memory_chunk {
+    size_t prev_size;
     // size of chunk, including header
     size_t size;
     // pointer to next free chunk
@@ -147,6 +147,7 @@ void *myalloc(size_t size) {
             return NULL;
 
     size_t alloc_size = GET_ALLIGNED_ALLOC_SIZE(size);
+    // Fastbin
     if(FASTBIN_IS_FASTBIN_SIZE(alloc_size)) {
         uint32_t offset = FASTBIN_GET_BIN_OFFSET(alloc_size);
         if(balloc_info.fastbin[offset].next != NULL) {
@@ -255,6 +256,8 @@ void *myrealloc(void *ptr, size_t size) {
 
     memory_chunk *mchunkptr = GET_CHUNK_PTR(ptr);
     if(GET_USERDATA_SIZE(mchunkptr) >= size) {
+        // Maybe speed-up when free is enhanced
+
         /**
         if(GET_CHUNK_SIZE(mchunkptr) >= MIN_ALLOC_SIZE + GET_ALLIGNED_ALLOC_SIZE(size)) {
             size_t new_size = GET_ALLIGNED_ALLOC_SIZE(size);
