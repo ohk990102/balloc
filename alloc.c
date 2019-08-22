@@ -14,8 +14,6 @@
 extern void debug(const char *fmt, ...);
 extern void *sbrk(intptr_t increment);
 
-#define __DEBUG
-
 #ifdef __DEBUG
 #define DEBUG(msg)      debug("%s: %s\n", __func__, msg)
 #define ASSERT(check, msg) {\
