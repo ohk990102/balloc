@@ -28,7 +28,7 @@ if((check)) {\
 
 
 // Define consts
-#define SBRK_SIZE_ALLIGN            (12)
+#define SBRK_SIZE_ALLIGN            (14)
 #define ALLOC_SIZE_ALLIGN_SHIFT     (4)
 #define ALLOC_SIZE_ALLIGN           (1 << ALLOC_SIZE_ALLIGN_SHIFT)
 
@@ -63,10 +63,18 @@ if((check)) {\
 
 // Fastbin macros
 #define FASTBIN_MIN_CHUNK_SIZE          (MIN_ALLOC_SIZE)
-#define FASTBIN_COUNT                   (10)
-#define FASTBIN_MAX_CHUNK_SIZE          (FASTBIN_MIN_CHUNK_SIZE + (FASTBIN_COUNT - 1) * ALLOC_SIZE_ALLIGN)
-#define FASTBIN_IS_FASTBIN_SIZE(size)   (FASTBIN_MIN_CHUNK_SIZE <= (size) && (size) <= FASTBIN_MAX_CHUNK_SIZE)
+#define FASTBIN_COUNT                   (30)
+#define FASTBIN_MAX_CHUNK_SIZE          (FASTBIN_MIN_CHUNK_SIZE + FASTBIN_COUNT * ALLOC_SIZE_ALLIGN)
+#define FASTBIN_IS_FASTBIN_SIZE(size)   (FASTBIN_MIN_CHUNK_SIZE <= (size) && (size) < FASTBIN_MAX_CHUNK_SIZE)
 #define FASTBIN_GET_BIN_OFFSET(size)    ((size - FASTBIN_MIN_CHUNK_SIZE) >> ALLOC_SIZE_ALLIGN_SHIFT)
+
+// Smallbin macros
+#define SMALLBIN_MIN_CHUNK_SIZE         (MIN_ALLOC_SIZE)
+#define SMALLBIN_COUNT                  (126)
+#define SMALLBIN_MAX_CHUNK_SIZE         (SMALLBIN_MIN_CHUNK_SIZE + SMALLBIN_COUNT * ALLOC_SIZE_ALLIGN)
+#define SMALLBIN_IS_SMALLBIN_SIZE(size) (SMALLBIN_MIN_CHUNK_SIZE <= (size) && (size) < SMALLBIN_MAX_CHUNK_SIZE)
+#define SMALLBIN_GET_BIN_OFFSET(size)   ((size - SMALLBIN_MIN_CHUNK_SIZE) >> ALLOC_SIZE_ALLIGN_SHIFT)
+
 
 typedef struct memory_chunk {
     // size of previous chunk
@@ -88,6 +96,7 @@ typedef struct balloc_info_struct {
 
     bin unsorted_bin;
     bin fastbin[FASTBIN_COUNT];
+    bin smallbin[SMALLBIN_COUNT];
 } balloc_info_struct;
 
 balloc_info_struct balloc_info;
@@ -120,6 +129,11 @@ bool increase_arena(size_t size) {
 void initialize_balloc() {
     balloc_info.unsorted_bin.prev = &(balloc_info.unsorted_bin);
     balloc_info.unsorted_bin.next = &(balloc_info.unsorted_bin);
+    for(int i = 0; i < SMALLBIN_COUNT; i++) {
+        balloc_info.smallbin[i].prev = &(balloc_info.smallbin[i]);
+        balloc_info.smallbin[i].next = &(balloc_info.smallbin[i]);
+    }
+    debug("%x\n", FASTBIN_MAX_CHUNK_SIZE);
 }
 
 
@@ -172,6 +186,22 @@ void *myalloc(size_t size) {
             return GET_USERDATA_PTR(iter);
         }
     }
+    // Small bin
+    if(SMALLBIN_IS_SMALLBIN_SIZE(alloc_size)) {
+        uint32_t offset = SMALLBIN_GET_BIN_OFFSET(alloc_size);
+        if(balloc_info.smallbin[offset].next != &(balloc_info.smallbin[offset])) {
+            memory_chunk *mchunkptr = balloc_info.smallbin[offset].next;
+            mchunkptr->prev->next = mchunkptr->next;
+            mchunkptr->next->prev = mchunkptr->prev;
+            memory_chunk *nextchunkptr = GET_ADJ_NEXT_CHUNK_PTR(mchunkptr);
+            if(IS_CHUNK(nextchunkptr))
+                SET_ADJ_PREV_INUSE(nextchunkptr, 1);    // TODO: check if the condition is not needed
+            return GET_USERDATA_PTR(mchunkptr);
+        }
+    }
+
+
+
     // Unsorted bin
     memory_chunk *iter = &(balloc_info.unsorted_bin);
     while(iter->next != &(balloc_info.unsorted_bin)) {
@@ -187,31 +217,7 @@ void *myalloc(size_t size) {
     return dumb_alloc(size);
 }
 
-
-
-/**
- * Free memory. 
- *
- * ptr: 
- *      pointer to free. 
- **/
-void myfree(void *ptr) {
-    if(ptr == NULL)
-        return;
-
-    memory_chunk *mchunkptr = GET_CHUNK_PTR(ptr);
-
-    size_t size = GET_CHUNK_SIZE(mchunkptr);
-    if(FASTBIN_IS_FASTBIN_SIZE(size)) {
-        uint32_t offset = FASTBIN_GET_BIN_OFFSET(size);
-        debug("%x %d\n", size, offset);
-        mchunkptr->next = balloc_info.fastbin[offset].next;
-        balloc_info.fastbin[offset].next = mchunkptr;
-        return;
-    }
-    
-    // Lets see prev
-
+void put_unsortedbin(memory_chunk *mchunkptr) {
     memory_chunk *endchunkptr = GET_ADJ_NEXT_CHUNK_PTR(mchunkptr);
     while(!CHECK_ADJ_PREV_INUSE(mchunkptr)) {
         mchunkptr = GET_ADJ_PREV_CHUNK_PTR(mchunkptr);
@@ -240,6 +246,30 @@ void myfree(void *ptr) {
     mchunkptr->prev = balloc_info.unsorted_bin.prev;
     balloc_info.unsorted_bin.prev->next = mchunkptr;
     balloc_info.unsorted_bin.prev = mchunkptr;
+}
+
+/**
+ * Free memory. 
+ *
+ * ptr: 
+ *      pointer to free. 
+ **/
+void myfree(void *ptr) {
+    if(ptr == NULL)
+        return;
+
+    memory_chunk *mchunkptr = GET_CHUNK_PTR(ptr);
+
+    size_t size = GET_CHUNK_SIZE(mchunkptr);
+    if(FASTBIN_IS_FASTBIN_SIZE(size)) {
+        uint32_t offset = FASTBIN_GET_BIN_OFFSET(size);
+        debug("%x %d\n", size, offset);
+        mchunkptr->next = balloc_info.fastbin[offset].next;
+        balloc_info.fastbin[offset].next = mchunkptr;
+        return;
+    }
+
+    put_unsortedbin(mchunkptr);
 }
 
 /**
