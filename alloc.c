@@ -10,8 +10,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+
 extern void debug(const char *fmt, ...);
 extern void *sbrk(intptr_t increment);
+
+#define __DEBUG
 
 #ifdef __DEBUG
 #define DEBUG(msg)      debug("%s: %s\n", __func__, msg)
@@ -28,11 +31,12 @@ if((check)) {\
 
 // Define consts
 #define SBRK_SIZE_ALLIGN            (12)
-#define ALLOC_SIZE_ALLIGN_SHIFT     (3)
+#define ALLOC_SIZE_ALLIGN_SHIFT     (4)
 #define ALLOC_SIZE_ALLIGN           (1 << ALLOC_SIZE_ALLIGN_SHIFT)
 
 #define MIN_ALLOC_SIZE              (sizeof(memory_chunk))
 #define HEADER_SIZE                 (offsetof(memory_chunk, next))
+#define USED_BY_PREV_CHUNK_SIZE     (offsetof(memory_chunk, size))
 #define UNINITIALIZED_ARENA_SIZE    (balloc_info.end_of_arena - balloc_info.uninitialized_arena)
 
 // Define macro functions
@@ -42,16 +46,19 @@ if((check)) {\
 #define CHECK_FLAGS(chunk)          (((chunk)->size) & (ALLOC_SIZE_ALLIGN - 1))
 
 #define CHECK_PREV_INUSE(chunk)     ((chunk)->size & 0x1)
-#define SET_PREV_INUSE(chunk)       ((chunk)->size |= 0x1)
+#define SET_PREV_INUSE(chunk, bit)       (((bit) == 0) ? ((chunk)->size &= ~(0x1)) : ((chunk)->size |= 0x1))
 
+#define GET_USERDATA_SIZE(chunk)    ((((chunk)->size) & (~(ALLOC_SIZE_ALLIGN - 1))) - (HEADER_SIZE - USED_BY_PREV_CHUNK_SIZE))
+#define GET_CHUNK_SIZE(chunk)       (((chunk)->size) & (~(ALLOC_SIZE_ALLIGN - 1)))
 #define GET_USERDATA_PTR(chunk)     (((void *)(chunk))+offsetof(memory_chunk, next))
 #define GET_CHUNK_PTR(ptr)          (((void *)(ptr))-offsetof(memory_chunk, next))
-#define GET_USERDATA_SIZE(chunk)    ((((chunk)->size) & (~(ALLOC_SIZE_ALLIGN - 1)))-HEADER_SIZE)
-#define GET_CHUNK_SIZE(chunk)       (((chunk)->size) & (~(ALLOC_SIZE_ALLIGN - 1)))
+#define GET_NEXT_CHUNK_PTR(chunk)   (((void *)(chunk))+GET_CHUNK_SIZE(chunk))
 
 #define GET_ALLIGNED_SIZE_MULTIPLES(size, multiples)        ((((size) + (multiples) - 1) / (multiples)) * (multiples))
 #define GET_ALLIGNED_SIZE_SHIFT(size, shift)                ((((size) + (1 << (shift)) - 1) >> (shift)) << (shift))
-#define GET_ALLIGNED_ALLOC_SIZE(size)                       (MAX((GET_ALLIGNED_SIZE_SHIFT((size) + HEADER_SIZE, ALLOC_SIZE_ALLIGN_SHIFT)), GET_ALLIGNED_SIZE_SHIFT(MIN_ALLOC_SIZE, ALLOC_SIZE_ALLIGN_SHIFT)))
+#define GET_ALLIGNED_ALLOC_SIZE(size)                       (MAX((GET_ALLIGNED_SIZE_SHIFT((size) + HEADER_SIZE - USED_BY_PREV_CHUNK_SIZE, ALLOC_SIZE_ALLIGN_SHIFT)), GET_ALLIGNED_SIZE_SHIFT(MIN_ALLOC_SIZE, ALLOC_SIZE_ALLIGN_SHIFT)))
+
+#define IS_CHUNK(chunk)             ((chunk) < balloc_info.uninitialized_arena)
 
 // Fastbin macros
 #define FASTBIN_MIN_CHUNK_SIZE          (MIN_ALLOC_SIZE)
@@ -120,15 +127,14 @@ bool increase_arena(size_t size) {
  **/
 void *dumb_alloc(size_t size) {
     size_t alloc_size = GET_ALLIGNED_ALLOC_SIZE(size);
-    ASSERT(alloc_size < size + HEADER_SIZE, "smaller alloc_size");
     ASSERT(alloc_size < MIN_ALLOC_SIZE, "smaller alloc_size");
-    if(UNINITIALIZED_ARENA_SIZE < alloc_size)
-        if(!increase_arena(alloc_size))
+    if(UNINITIALIZED_ARENA_SIZE < alloc_size + USED_BY_PREV_CHUNK_SIZE)
+        if(!increase_arena(alloc_size + USED_BY_PREV_CHUNK_SIZE))
             return NULL;   
     
     memory_chunk *mchunkptr = balloc_info.uninitialized_arena;
     mchunkptr->size = alloc_size;
-    SET_PREV_INUSE(mchunkptr);
+    SET_PREV_INUSE(mchunkptr, 1);
     balloc_info.uninitialized_arena += alloc_size;
     ASSERT(GET_USERDATA_SIZE(mchunkptr) < size, "smaller userdata_size");
     ASSERT(GET_CHUNK_SIZE(mchunkptr) + (void *)mchunkptr != balloc_info.uninitialized_arena, "wrong size");
@@ -222,6 +228,12 @@ void myfree(void *ptr) {
         debug("%x %d\n", size, offset);
         mchunkptr->next = balloc_info.fastbin[offset].next;
         balloc_info.fastbin[offset].next = mchunkptr;
+
+        memory_chunk *nextchunkptr = GET_NEXT_CHUNK_PTR(mchunkptr);
+        if(IS_CHUNK(nextchunkptr)) {
+            nextchunkptr->prev_size = size;
+            SET_PREV_INUSE(nextchunkptr, 0);
+        }
         return;
     }
     
@@ -279,6 +291,7 @@ void *myrealloc(void *ptr, size_t size) {
     if(ptr != NULL) {
         memcpy(newptr, ptr, GET_USERDATA_SIZE(mchunkptr));
     }
+    myfree(ptr);
 
     return newptr;
 }
