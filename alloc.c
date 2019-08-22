@@ -61,8 +61,10 @@ if((check)) {\
 #define FASTBIN_GET_BIN_OFFSET(size)    ((size - FASTBIN_MIN_CHUNK_SIZE) >> ALLOC_SIZE_ALLIGN_SHIFT)
 
 typedef struct memory_chunk {
+    // size of previous chunk
+    // note that this member overlaps userdata of previous chunk
     size_t prev_size;
-    // size of chunk, including header
+    // size of chunk, including flags
     size_t size;
     // pointer to next free chunk
     // also overlaps userdata offset
